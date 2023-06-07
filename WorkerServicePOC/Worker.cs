@@ -4,6 +4,7 @@ using Amazon.Runtime;
 using Amazon.StepFunctions;
 using Amazon.StepFunctions.Model;
 using Newtonsoft.Json.Linq;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Task = System.Threading.Tasks.Task;
@@ -17,16 +18,22 @@ namespace WorkerServicePOC
         private readonly AmazonStepFunctionsClient client;
         private readonly string accessKeyId;
         private readonly string secretAccessKey;
-        private static int numThreads = 5; // Number of threads to run
+        private readonly int numThreads = 5;
+        private readonly int numOfTasks = 6;
+        private readonly int threadCount; // Number of threads to run
+                                          //Allowing Maximum 3 tasks to be executed at a time
+        private readonly SemaphoreSlim semaphoreSlim;
 
         public Worker(ILogger<Worker> logger)
         {
             _logger = logger;
             accessKeyId = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID");
             secretAccessKey = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY");
+            threadCount = Convert.ToInt32(Environment.GetEnvironmentVariable("ThreadCount"));
             AWSCredentials credentials = new BasicAWSCredentials(accessKeyId, secretAccessKey);
             RegionEndpoint region = RegionEndpoint.USEast1;
             client = new AmazonStepFunctionsClient(credentials, region);
+            semaphoreSlim = new SemaphoreSlim(threadCount, threadCount);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -63,11 +70,12 @@ namespace WorkerServicePOC
 
             }
 
+            // asyncronus process handelling 
             _ = Task.Run(() => RunAsyncBlock(getActivityTaskResponse));
 
         }
 
-         async Task RunAsyncBlock(GetActivityTaskResponse getActivityTaskResponse)
+        async Task RunAsyncBlock(GetActivityTaskResponse getActivityTaskResponse)
         {
             if (!string.IsNullOrEmpty(getActivityTaskResponse.TaskToken))
             {
@@ -75,7 +83,7 @@ namespace WorkerServicePOC
                 string myIP = Dns.GetHostByName(hostName).AddressList[0].ToString();
 
 
-                _logger.LogInformation("OSR Worker request processing started at: {time} IP: {dns}", DateTimeOffset.Now, myIP);
+                _logger.LogInformation("Tag 15 OSR Worker request processing started at: {time} IP: {dns}", DateTimeOffset.Now, myIP);
                 // Perform the activity task here
                 string taskToken = getActivityTaskResponse.TaskToken;
                 string input = getActivityTaskResponse.Input;
@@ -89,27 +97,39 @@ namespace WorkerServicePOC
                     TaskToken = taskToken,
                     Output = output
                 };
-
+                var stopwatch = new Stopwatch();
+                stopwatch.Start();
 
                 //check threads 
                 var tasks = new List<Task>();
 
                 #region test code to check threads 
                 // Create and start multiple threads 
-
-                for (int i = 0; i < numThreads; i++)
+                for (int i = 0; i < numOfTasks; i++)
                 {
                     int threadId = i; // Capturing the current loop variable
-                    var thread = new Thread(() => WorkerThread(threadId));
-                    thread.Start();
-                    tasks.Add(Task.Run(() => thread.Join()));
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        await semaphoreSlim.WaitAsync();
+                        try
+                        {
+                            await WorkerThreadNew(threadId);
+                        }
+                        finally
+                        {
+                            semaphoreSlim.Release();
+
+                        }
+                    }));
                 }
                 #endregion
 
 
                 // Wait for all threads to complete
                 Task.WaitAll(tasks.ToArray());
-
+                stopwatch.Stop();
+                Console.WriteLine(
+                    $"Processing of tasks Done in {stopwatch.ElapsedMilliseconds / 1000.0} Seconds , count {semaphoreSlim.CurrentCount}");
 
                 client.SendTaskSuccessAsync(sendTaskSuccessRequest).GetAwaiter().GetResult();
 
@@ -134,16 +154,10 @@ namespace WorkerServicePOC
             return output;
         }
 
-
-        private void WorkerThread(int threadId)
+        private async Task WorkerThreadNew(int threadId)
         {
-           // _logger.LogInformation($"Thread {threadId} started.");
-            // Perform the work for each thread
-            // Add your custom logic here
-
-            Thread.Sleep(TimeSpan.FromSeconds(15)); // Simulate work
-
-           // _logger.LogInformation($"Thread {threadId} completed.");
+            await Task.Delay(TimeSpan.FromSeconds(20));
+            _logger.LogInformation($"Thread {threadId} completed.");
         }
     }
 }
