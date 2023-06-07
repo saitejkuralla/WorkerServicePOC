@@ -18,7 +18,6 @@ namespace WorkerServicePOC
         private readonly AmazonStepFunctionsClient client;
         private readonly string accessKeyId;
         private readonly string secretAccessKey;
-        private readonly int numThreads = 5;
         private readonly int numOfTasks = 6;
         private readonly int threadCount; // Number of threads to run
                                           //Allowing Maximum 3 tasks to be executed at a time
@@ -69,10 +68,8 @@ namespace WorkerServicePOC
                 }
 
             }
-
             // asyncronus process handelling 
             _ = Task.Run(() => RunAsyncBlock(getActivityTaskResponse));
-
         }
 
         async Task RunAsyncBlock(GetActivityTaskResponse getActivityTaskResponse)
